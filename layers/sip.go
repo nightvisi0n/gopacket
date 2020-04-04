@@ -201,6 +201,7 @@ type SIP struct {
 	cseq             int64
 	contentLength    int64
 	lastHeaderParsed string
+	origHeaders      []string
 }
 
 // decodeSIP decodes the byte slice into a SIP type. It also
@@ -398,6 +399,7 @@ func (s *SIP) ParseHeader(header []byte) (err error) {
 	if index >= 0 {
 
 		headerName := strings.ToLower(string(bytes.Trim(header[:index], " ")))
+		s.origHeaders = append(s.origHeaders, string(bytes.Trim(header[:index], " ")))
 		headerValue := string(bytes.Trim(header[index+1:], " "))
 
 		// Add header to object
@@ -540,4 +542,75 @@ func (s *SIP) GetContentLength() int64 {
 // header of the current SIP packet
 func (s *SIP) GetCSeq() int64 {
 	return s.cseq
+}
+
+// SerializeTo writes the serialized form of this layer into the
+// SerializationBuffer, implementing gopacket.SerializableLayer.
+// See the docs for gopacket.SerializableLayer for more info.
+func (s *SIP) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
+
+	var firstLine string
+
+	// first line is the SIP request/response line
+	if s.IsResponse {
+		firstLine = fmt.Sprintf(
+			"%s %d %s\r\n",
+			s.Version.String(),
+			s.ResponseCode,
+			s.ResponseStatus,
+		)
+	} else {
+		// request
+		firstLine = fmt.Sprintf(
+			"%s %s %s\r\n",
+			s.Method.String(),
+			s.RequestURI,
+			s.Version.String(),
+		)
+	}
+
+	data, err := b.AppendBytes(len([]rune(firstLine)))
+	if err != nil {
+		return err
+	}
+	copy(data, firstLine)
+
+	// other lines are headers
+	for _, header := range s.origHeaders {
+		for _, value := range s.Headers[strings.ToLower(header)] {
+			var line string
+
+			line = fmt.Sprintf(
+				"%s: %s\r\n",
+				header,
+				value,
+			)
+
+			data, err := b.AppendBytes(len([]rune(line)))
+			if err != nil {
+				return err
+			}
+			copy(data, line)
+		}
+	}
+
+	if len(s.BaseLayer.Payload) > 0 {
+		// append payload
+
+		emptyLine := "\r\n"
+
+		data, err := b.AppendBytes(len([]rune(emptyLine)))
+		if err != nil {
+			return err
+		}
+		copy(data, emptyLine)
+
+		data, err = b.AppendBytes(len(s.BaseLayer.Payload))
+		if err != nil {
+			return err
+		}
+		copy(data, s.BaseLayer.Payload)
+	}
+
+	return nil
 }
